@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 200" width="800" height="200">
+  <!-- Water droplets/waves -->
+  <g id="water-marks">
+    <!-- Dark blue droplet 1 -->
+    <path d="M 80 40 Q 70 60 75 90 Q 80 120 95 140 Q 105 130 105 100 Q 105 70 95 50 Z" fill="#0052CC"/>
+
+    <!-- Light blue wave 1 -->
+    <path d="M 110 50 Q 100 70 105 100 Q 110 130 125 145 Q 135 125 130 90 Q 125 60 115 45 Z" fill="#4DA6FF"/>
+
+    <!-- Medium blue wave 2 -->
+    <path d="M 50 60 Q 40 80 45 110 Q 50 140 65 155 Q 75 140 70 100 Q 65 70 55 50 Z" fill="#0066FF"/>
+
+    <!-- Light blue wave 3 -->
+    <path d="M 130 70 Q 120 90 125 120 Q 130 150 145 165 Q 155 145 150 105 Q 145 75 135 60 Z" fill="#66B3FF"/>
+  </g>
+
+  <!-- Text -->
+  <text x="280" y="130" font-family="Arial, sans-serif" font-size="72" font-weight="bold" fill="#0052CC" letter-spacing="4">
+    KABSON WATERS
+  </text>
+</svg>
