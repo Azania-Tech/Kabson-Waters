@@ -1,24 +1,39 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import SiteShell from "@/components/site-shell";
+import { KwIcon } from "@/components/ui/icons";
 import {
   subscribeToInventory, createRetailSale, updateInventoryStock,
   subscribeToCustomers, updateCustomerCredit, type InventoryItem, type CustomerProfile,
 } from "@/lib/commerce";
+import { closeShift, getShiftOpenedAt, loadShiftStatus, openShift } from "@/lib/pos-shift";
+import {
+  getPriceForSaleKind,
+  getRetailPrice,
+  getWholesalePrice,
+  getRefillPrice,
+  shouldSkipInventory,
+  saleKindLabel,
+  type SaleKind,
+} from "@/lib/pricing";
+
+type CartLine = { itemId: string; quantity: number; saleKind: SaleKind };
+const cartLineKey = (itemId: string, saleKind: SaleKind) => `${itemId}:${saleKind}`;
 
 const PAYMENT_METHODS = [
   { id: "Cash", label: "Cash", icon: "💵" },
-  { id: "Card", label: "Card", icon: "💳" },
-  { id: "Mobile Money", label: "M-Pesa", icon: "📱" },
-  { id: "Credit", label: "Credit", icon: "🏦" },
+  { id: "Card", label: "Card", iconName: "credit-card", labelShort: "Card" },
+  { id: "Mobile Money", label: "M-Pesa", icon: "📱", labelShort: "M-Pesa" },
+  { id: "Split", label: "Split", iconName: "swap-horizontal", labelShort: "Split" },
+  { id: "Credit", label: "Credit", iconName: "coins", labelShort: "Credit" },
 ];
 
 export default function RetailPage() {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [customers, setCustomers] = useState<CustomerProfile[]>([]);
-  const [cart, setCart] = useState<Record<string, number>>({});
+  const [cart, setCart] = useState<CartLine[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [loading, setLoading] = useState(false);
@@ -27,14 +42,19 @@ export default function RetailPage() {
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerProfile | null>(null);
   const [paymentMethod, setPaymentMethod] = useState("Cash");
   const [amountTendered, setAmountTendered] = useState("");
+  const [splitCashAmount, setSplitCashAmount] = useState("");
+  const [splitMpesaAmount, setSplitMpesaAmount] = useState("");
   const [showCheckout, setShowCheckout] = useState(false);
-  const [shiftStatus, setShiftStatus] = useState<"Closed" | "Open">("Closed");
+  const [shiftStatus, setShiftStatus] = useState<"Closed" | "Open">(() => loadShiftStatus());
+  const shiftOpenedAt = shiftStatus === "Open" ? getShiftOpenedAt() : null;
   const [includeTax, setIncludeTax] = useState(false);
 
   useEffect(() => {
     const u1 = subscribeToInventory(setInventory);
     const u2 = subscribeToCustomers(setCustomers);
-    return () => { u1(); u2(); };
+    const onStorage = () => setShiftStatus(loadShiftStatus());
+    window.addEventListener("storage", onStorage);
+    return () => { u1(); u2(); window.removeEventListener("storage", onStorage); };
   }, []);
 
   const categories = useMemo(() => ["All", ...new Set(inventory.map((i) => i.category))], [inventory]);
@@ -50,10 +70,12 @@ export default function RetailPage() {
     [customers, customerSearch]);
 
   const cartItems = useMemo(() =>
-    Object.entries(cart).map(([itemId, quantity]) => {
-      const item = inventory.find((i) => i.id === itemId);
-      return item ? { ...item, quantity } : null;
-    }).filter(Boolean) as (InventoryItem & { quantity: number })[],
+    cart.map((line) => {
+      const item = inventory.find((i) => i.id === line.itemId);
+      if (!item) return null;
+      const price = getPriceForSaleKind(item, line.saleKind);
+      return { ...item, quantity: line.quantity, saleKind: line.saleKind, price, lineKey: cartLineKey(line.itemId, line.saleKind) };
+    }).filter(Boolean) as (InventoryItem & { quantity: number; saleKind: SaleKind; lineKey: string })[],
     [cart, inventory]);
 
   const subtotal = useMemo(() => cartItems.reduce((s, i) => s + i.price * i.quantity, 0), [cartItems]);
@@ -63,16 +85,55 @@ export default function RetailPage() {
 
   const lowStockItems = useMemo(() => inventory.filter((i) => i.stock <= i.reorderPoint), [inventory]);
 
-  const addToCart = (id: string) => setCart((c) => ({ ...c, [id]: (c[id] ?? 0) + 1 }));
-  const addMultipleToCart = (id: string, qty: number) => setCart((c) => ({ ...c, [id]: (c[id] ?? 0) + qty }));
-  const removeOne = (id: string) => setCart((c) => {
-    const next = (c[id] ?? 0) - 1;
-    if (next <= 0) { const { [id]: _, ...rest } = c; return rest; }
-    return { ...c, [id]: next };
-  });
-  const clearCart = () => { setCart({}); setSelectedCustomer(null); setAmountTendered(""); };
+  const addToCart = (id: string, saleKind: SaleKind = "retail", qty = 1) => {
+    setCart((lines) => {
+      const key = cartLineKey(id, saleKind);
+      const existing = lines.find((l) => cartLineKey(l.itemId, l.saleKind) === key);
+      if (existing) {
+        return lines.map((l) =>
+          cartLineKey(l.itemId, l.saleKind) === key ? { ...l, quantity: l.quantity + qty } : l
+        );
+      }
+      return [...lines, { itemId: id, quantity: qty, saleKind }];
+    });
+  };
+  const removeOne = (lineKey: string) => {
+    setCart((lines) => {
+      const line = lines.find((l) => cartLineKey(l.itemId, l.saleKind) === lineKey);
+      if (!line) return lines;
+      if (line.quantity <= 1) return lines.filter((l) => cartLineKey(l.itemId, l.saleKind) !== lineKey);
+      return lines.map((l) =>
+        cartLineKey(l.itemId, l.saleKind) === lineKey ? { ...l, quantity: l.quantity - 1 } : l
+      );
+    });
+  };
+  const clearCart = () => { setCart([]); setSelectedCustomer(null); setAmountTendered(""); setSplitCashAmount(""); setSplitMpesaAmount(""); };
 
   const [saleError, setSaleError] = useState("");
+  const splitCash = parseFloat(splitCashAmount) || 0;
+  const splitMpesa = parseFloat(splitMpesaAmount) || 0;
+  const splitTotal = splitCash + splitMpesa;
+  const splitBalance = total - splitTotal;
+
+  const selectPaymentMethod = (method: string) => {
+    setPaymentMethod(method);
+    setSaleError("");
+    if (method !== "Cash") setAmountTendered("");
+    if (method !== "Split") {
+      setSplitCashAmount("");
+      setSplitMpesaAmount("");
+    }
+  };
+
+  const handleShiftToggle = () => {
+    if (shiftStatus === "Open") {
+      if (!window.confirm("Close this shift? Sales cannot be recorded until you open a new shift.")) return;
+      setShiftStatus(closeShift());
+    } else {
+      setShiftStatus(openShift());
+    }
+    setSaleError("");
+  };
 
   const completeSale = async () => {
     if (cartItems.length === 0) return;
@@ -93,19 +154,47 @@ export default function RetailPage() {
         return;
       }
     }
+
+    if (paymentMethod === "Cash") {
+      const paid = parseFloat(amountTendered) || 0;
+      if (paid < total) {
+        setSaleError("Cash payment must cover the total amount.");
+        return;
+      }
+    }
+
+    if (paymentMethod === "Split") {
+      if (splitCash <= 0 || splitMpesa <= 0) {
+        setSaleError("Enter both cash and M-Pesa amounts for a split payment.");
+        return;
+      }
+      if (splitTotal !== total) {
+        setSaleError(`Split payments must total KES ${total.toLocaleString()}.`);
+        return;
+      }
+    }
     setLoading(true);
     setSaleError("");
     try {
       await createRetailSale({
         ...(selectedCustomer?.id ? { customerId: selectedCustomer.id } : {}),
-        items: cartItems.map((i) => ({ itemId: i.id, quantity: i.quantity, price: i.price })),
+        items: cartItems.map((i) => ({
+          itemId: i.id,
+          itemName: i.name,
+          quantity: i.quantity,
+          price: i.price,
+          saleKind: i.saleKind,
+          skipInventory: shouldSkipInventory(i.saleKind),
+        })),
         total,
         paymentMethod,
+        ...(paymentMethod === "Split" ? { paymentBreakdown: { Cash: splitCash, "M-Pesa": splitMpesa } } : {}),
         status: "Completed",
       });
-      // Update stock for all items in parallel
       await Promise.all(
-        cartItems.map((item) => updateInventoryStock(item.id, Math.max(0, item.stock - item.quantity)))
+        cartItems
+          .filter((item) => !shouldSkipInventory(item.saleKind))
+          .map((item) => updateInventoryStock(item.id, Math.max(0, item.stock - item.quantity)))
       );
       // If credit, increase customer's credit balance
       if (paymentMethod === "Credit" && selectedCustomer) {
@@ -125,29 +214,51 @@ export default function RetailPage() {
     <SiteShell>
       <div className="flex flex-col h-full overflow-hidden">
         {/* Top bar */}
-        <div className="bg-gradient-to-r from-blue-700 to-blue-600 text-white px-4 sm:px-6 py-3 flex items-center justify-between gap-2 sm:gap-4 shrink-0 flex-wrap">
-          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-            <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-lg shrink-0">🛒</div>
-            <div className="min-w-0">
-              <p className="font-black text-xs sm:text-sm">KABSON WATERS — POS</p>
-              <p className="text-blue-200 text-xs hidden sm:block">{new Date().toLocaleDateString("en-KE", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</p>
+        <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white px-4 sm:px-6 py-4 flex flex-col gap-3 sm:gap-0 sm:flex-row sm:items-center sm:justify-between shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-12 h-12 rounded-3xl bg-white/10 border border-white/10 flex items-center justify-center shrink-0 shadow-sm shadow-black/10">
+              <KwIcon name="pos" size={20} className="text-cyan-200" />
             </div>
+            <div className="min-w-0">
+              <p className="font-black text-sm sm:text-base tracking-wide">Kabson Waters POS</p>
+              <p className="text-slate-300 text-[11px] sm:text-xs truncate">
+                {new Date().toLocaleDateString("en-KE", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-[auto_auto] gap-2 items-center justify-end">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-semibold ${shiftStatus === "Open" ? "bg-emerald-500/15 text-emerald-200" : "bg-rose-500/15 text-rose-200"}`}>
+                <KwIcon name={shiftStatus === "Open" ? "check" : "alert"} size={14} className="text-current" />
+                {shiftStatus} Shift
+              </span>
+              {shiftOpenedAt && shiftStatus === "Open" && (
+                <span className="text-[11px] text-slate-300">Open since {shiftOpenedAt.toLocaleTimeString("en-KE", { hour: "2-digit", minute: "2-digit" })}</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {lowStockItems.length > 0 && (
+                <span className="rounded-full bg-amber-400/15 text-amber-900 text-xs font-bold px-3 py-1 flex items-center gap-1">
+                  <KwIcon name="alert" size={12} className="text-amber-900" />
+                  {lowStockItems.length} low stock
+                </span>
+              )}
+              <Link href="/inventory" className="rounded-2xl bg-white text-slate-900 text-xs font-semibold px-3 py-2 transition hover:bg-slate-100 inline-flex items-center gap-2 ring-1 ring-white/10 shadow-sm shadow-black/10">
+                <KwIcon name="store" size={16} className="text-slate-900" />
+                Inventory
+              </Link>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 justify-end sm:col-span-2">
             <button
-              onClick={() => setShiftStatus(s => s === "Open" ? "Closed" : "Open")}
-              className={`ml-4 text-xs font-bold px-3 py-1.5 rounded-xl transition ${shiftStatus === "Open" ? "bg-rose-500 hover:bg-rose-600 text-white" : "bg-emerald-500 hover:bg-emerald-600 text-white"}`}
+              type="button"
+              onClick={handleShiftToggle}
+              className={`text-xs font-bold px-4 py-2 rounded-2xl transition ${shiftStatus === "Open" ? "bg-rose-500 hover:bg-rose-600 text-white" : "bg-emerald-500 hover:bg-emerald-600 text-white"}`}
             >
               {shiftStatus === "Open" ? "Close Shift" : "Open Shift"}
             </button>
-          </div>
-          <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-            {lowStockItems.length > 0 && (
-              <span className="rounded-full bg-amber-400 text-amber-900 text-xs font-bold px-2 sm:px-3 py-1">
-                ⚠ {lowStockItems.length}
-              </span>
-            )}
-            <Link href="/inventory" className="rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-semibold px-2 sm:px-3 py-1.5 transition">
-              Inv
-            </Link>
           </div>
         </div>
 
@@ -178,58 +289,73 @@ export default function RetailPage() {
             <div className="flex-1 overflow-y-auto p-4">
               {filteredProducts.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full text-slate-400">
-                  <p className="text-4xl mb-3">🔍</p>
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-12 h-12 mb-3 opacity-40" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" /></svg>
                   <p className="font-semibold">No products found</p>
                   <p className="text-sm mt-1">Try a different search or category</p>
                 </div>
               ) : (
                 <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
                   {filteredProducts.map((product) => {
-                    const inCart = cart[product.id] ?? 0;
+                    const inCart = cartItems.filter((i) => i.id === product.id).reduce((s, i) => s + i.quantity, 0);
                     const isLow = product.stock <= product.reorderPoint;
                     const outOfStock = product.stock === 0;
+                    const retailPrice = getRetailPrice(product);
+                    const wholesalePrice = getWholesalePrice(product);
+                    const refillPrice = getRefillPrice(product);
+                    const is1L = product.name.toLowerCase().includes("1l") && !product.name.toLowerCase().includes("500ml");
+                    const is500ml = product.name.toLowerCase().includes("500ml");
                     return (
-                      <button key={product.id} onClick={() => !outOfStock && addToCart(product.id)} disabled={outOfStock}
-                        className={`relative rounded-2xl border-2 bg-white p-4 text-left transition-all duration-150 ${
-                          outOfStock ? "opacity-50 cursor-not-allowed border-slate-200" :
-                          inCart > 0 ? "border-blue-500 shadow-md shadow-blue-100 scale-[1.02]" :
-                          "border-slate-200 hover:border-blue-300 hover:shadow-md active:scale-95"
+                      <div key={product.id}
+                        className={`relative rounded-3xl border bg-white p-4 text-left transition-all duration-150 ${
+                          inCart > 0 ? "border-blue-500 shadow-[0_20px_50px_-30px_rgba(59,130,246,0.8)]" : "border-slate-200 hover:border-blue-300 hover:shadow-md"
                         }`}>
                         {inCart > 0 && (
-                          <div className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-black flex items-center justify-center shadow-sm">
+                          <div className="absolute -top-2 -right-2 w-7 h-7 rounded-full bg-blue-600 text-white text-[11px] font-black flex items-center justify-center shadow-sm">
                             {inCart}
                           </div>
                         )}
-                        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-cyan-500 flex items-center justify-center mb-3">
-                          <svg viewBox="0 0 24 24" className="w-5 h-5 fill-white opacity-90">
-                            <path d="M12 2C8.5 7 5 10.5 5 14a7 7 0 0014 0c0-3.5-3.5-7-7-12z"/>
-                          </svg>
+                        <div className="w-12 h-12 rounded-3xl bg-gradient-to-br from-blue-600 to-cyan-500 flex items-center justify-center mb-3 shadow-lg shadow-blue-100/40">
+                          <KwIcon name="droplet" size={20} className="text-white" />
                         </div>
-                        <p className="text-xs font-bold text-blue-500 uppercase tracking-wide">{product.category}</p>
-                        <p className="font-bold text-slate-900 text-sm mt-0.5 leading-tight">{product.name}</p>
-                        <p className="text-base font-black text-slate-900 mt-2">KES {product.price.toLocaleString()}</p>
-                        <div className="flex items-center justify-between mt-2">
-                          <span className={`text-xs font-semibold ${isLow ? "text-rose-500" : "text-emerald-600"}`}>
+                        <p className="inline-flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500 mb-2">
+                          <span className={`inline-flex h-6 min-w-[6rem] items-center justify-center rounded-full px-2 ${isLow ? "bg-rose-50 text-rose-600" : "bg-emerald-50 text-emerald-700"}`}>
                             {outOfStock ? "Out of stock" : `${product.stock} left`}
                           </span>
-                          {inCart > 0 && (
-                            <button onClick={(e) => { e.stopPropagation(); removeOne(product.id); }}
-                              className="w-5 h-5 rounded-full bg-slate-100 hover:bg-rose-100 text-slate-500 hover:text-rose-600 flex items-center justify-center text-xs font-bold transition">
-                              −
+                        </p>
+                        <p className="font-bold text-slate-900 text-sm leading-tight line-clamp-2">{product.name}</p>
+                        <p className="text-xs text-slate-400 mt-1 truncate">{product.category}</p>
+                        <div className="mt-3 flex items-end justify-between gap-3">
+                          <div>
+                            <p className="text-base font-black text-slate-900">KES {retailPrice.toLocaleString()}</p>
+                            <p className="text-[11px] text-slate-400 mt-0.5">Pack: KES {wholesalePrice.toLocaleString()} · Refill: KES {refillPrice.toLocaleString()}</p>
+                          </div>
+                          <span className={`text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-full ${outOfStock ? "bg-rose-100 text-rose-700" : "bg-blue-50 text-blue-700"}`}>
+                            {is500ml ? "500ml" : is1L ? "1L" : "Retail"}
+                          </span>
+                        </div>
+                        <div className="mt-4 grid gap-2">
+                          <button onClick={() => !outOfStock && addToCart(product.id, "retail")} disabled={outOfStock}
+                            className="w-full text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-2xl transition disabled:opacity-50 disabled:cursor-not-allowed">
+                            + Add Retail • KES {retailPrice.toLocaleString()}
+                          </button>
+                          {is1L && (
+                            <button onClick={() => !outOfStock && addToCart(product.id, "wholesale", 12)} disabled={outOfStock}
+                              className="w-full text-xs font-bold bg-slate-100 hover:bg-blue-100 text-slate-700 hover:text-blue-700 py-3 rounded-2xl transition disabled:opacity-50 disabled:cursor-not-allowed">
+                              Pack (12) • KES {wholesalePrice.toLocaleString()} ea
                             </button>
                           )}
+                          {is500ml && (
+                            <button onClick={() => !outOfStock && addToCart(product.id, "wholesale", 24)} disabled={outOfStock}
+                              className="w-full text-xs font-bold bg-slate-100 hover:bg-blue-100 text-slate-700 hover:text-blue-700 py-3 rounded-2xl transition disabled:opacity-50 disabled:cursor-not-allowed">
+                              Pack (24) • KES {wholesalePrice.toLocaleString()} ea
+                            </button>
+                          )}
+                          <button onClick={() => addToCart(product.id, "refill")}
+                            className="w-full text-xs font-bold bg-purple-50 hover:bg-purple-100 text-purple-700 py-3 rounded-2xl transition border border-purple-200">
+                            Refill • KES {refillPrice.toLocaleString()}
+                          </button>
                         </div>
-                        {product.name.toLowerCase().includes("1l") && !product.name.toLowerCase().includes("500ml") && (
-                          <button onClick={(e) => { e.stopPropagation(); addMultipleToCart(product.id, 12); }} disabled={outOfStock} className="mt-3 w-full text-xs font-bold bg-slate-100 hover:bg-blue-100 text-slate-700 hover:text-blue-700 py-2 rounded-lg transition disabled:opacity-50">
-                            Add Pack (12)
-                          </button>
-                        )}
-                        {product.name.toLowerCase().includes("500ml") && (
-                          <button onClick={(e) => { e.stopPropagation(); addMultipleToCart(product.id, 24); }} disabled={outOfStock} className="mt-3 w-full text-xs font-bold bg-slate-100 hover:bg-blue-100 text-slate-700 hover:text-blue-700 py-2 rounded-lg transition disabled:opacity-50">
-                            Add Pack (24)
-                          </button>
-                        )}
-                      </button>
+                      </div>
                     );
                   })}
                 </div>
@@ -310,16 +436,24 @@ export default function RetailPage() {
               ) : (
                 <div className="space-y-2">
                   {cartItems.map((item) => (
-                    <div key={item.id} className="flex items-center gap-3 rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5">
+                    <div key={item.lineKey} className="flex items-center gap-3 rounded-xl bg-slate-50 border border-slate-100 px-3 py-2.5">
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-bold text-slate-900 truncate">{item.name}</p>
-                        <p className="text-xs text-slate-500">{item.quantity} × KES {item.price.toLocaleString()}</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-sm font-bold text-slate-900 truncate">{item.name}</p>
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                            item.saleKind === "refill" ? "bg-purple-100 text-purple-700" :
+                            item.saleKind === "wholesale" ? "bg-amber-100 text-amber-700" :
+                            "bg-sky-100 text-sky-700"
+                          }`}>{saleKindLabel(item.saleKind)}</span>
+                        </div>
+                        <p className="text-xs text-slate-500">{item.quantity} x KES {item.price.toLocaleString()}</p>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <span className="text-sm font-black text-slate-900">KES {(item.price * item.quantity).toLocaleString()}</span>
                         <div className="flex items-center gap-1">
-                          <button onClick={() => removeOne(item.id)} className="w-6 h-6 rounded-full bg-slate-200 hover:bg-rose-100 text-slate-600 hover:text-rose-600 flex items-center justify-center text-xs font-bold transition">−</button>
-                          <button onClick={() => addToCart(item.id)} className="w-6 h-6 rounded-full bg-blue-100 hover:bg-blue-200 text-blue-700 flex items-center justify-center text-xs font-bold transition">+</button>
+                          <button onClick={() => removeOne(item.lineKey)} className="w-6 h-6 rounded-full bg-slate-200 hover:bg-rose-100 text-slate-600 hover:text-rose-600 flex items-center justify-center text-xs font-bold transition">-</button>
+                          <button onClick={() => addToCart(item.id, item.saleKind)} disabled={item.saleKind !== "refill" && item.stock <= item.quantity}
+                            className="w-6 h-6 rounded-full bg-blue-100 hover:bg-blue-200 text-blue-700 flex items-center justify-center text-xs font-bold transition disabled:opacity-40">+</button>
                         </div>
                       </div>
                     </div>
@@ -352,18 +486,19 @@ export default function RetailPage() {
               </div>
 
               {/* Payment method */}
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {PAYMENT_METHODS.map((m) => (
-                  <button key={m.id} onClick={() => setPaymentMethod(m.id)}
+                  <button key={m.id} onClick={() => selectPaymentMethod(m.id)}
                     disabled={m.id === "Credit" && !selectedCustomer}
-                    className={`flex flex-col items-center gap-1 rounded-xl py-2.5 text-xs font-bold transition disabled:opacity-40 disabled:cursor-not-allowed ${paymentMethod === m.id ? "bg-blue-600 text-white shadow-sm" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>
-                    <span className="text-base">{m.icon}</span>
-                    {m.label}
+                    className={`group flex flex-col items-center justify-center gap-1 rounded-2xl py-3 text-xs font-bold transition shadow-sm ${paymentMethod === m.id ? "bg-blue-600 text-white shadow-blue-200/40" : "bg-slate-100 text-slate-600 hover:bg-slate-200"} disabled:opacity-40 disabled:cursor-not-allowed`}>
+                    <span className="text-lg">
+                      {m.iconName ? <KwIcon name={m.iconName} size={18} className={paymentMethod === m.id ? "text-white" : "text-slate-600"} /> : m.icon}
+                    </span>
+                    <span className="text-[11px] uppercase tracking-[0.16em]">{m.labelShort ?? m.label}</span>
                   </button>
                 ))}
               </div>
 
-              {/* Cash tendered */}
               {paymentMethod === "Cash" && (
                 <div>
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-wide">Amount tendered</label>
@@ -372,6 +507,31 @@ export default function RetailPage() {
                     className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none bg-slate-50 focus:bg-white transition" />
                   {amountTendered && parseFloat(amountTendered) >= total && (
                     <p className="text-xs font-bold text-emerald-600 mt-1">Change: KES {change.toLocaleString()}</p>
+                  )}
+                </div>
+              )}
+
+              {paymentMethod === "Split" && (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wide">Cash amount</label>
+                    <input type="number" min="0" placeholder={`KES ${total.toLocaleString()}`} value={splitCashAmount}
+                      onChange={(e) => setSplitCashAmount(e.target.value)}
+                      className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none bg-slate-50 focus:bg-white transition" />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wide">M-Pesa amount</label>
+                    <input type="number" min="0" placeholder={`KES ${total.toLocaleString()}`} value={splitMpesaAmount}
+                      onChange={(e) => setSplitMpesaAmount(e.target.value)}
+                      className="mt-1 w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-bold focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none bg-slate-50 focus:bg-white transition" />
+                  </div>
+                  <div className="sm:col-span-2 text-xs text-slate-500">
+                    Split payment must exactly total <span className="font-semibold">KES {total.toLocaleString()}</span>.
+                  </div>
+                  {splitTotal > 0 && splitTotal !== total && (
+                    <div className="sm:col-span-2 text-xs text-rose-600">
+                      Total entered is off by KES {Math.abs(splitBalance).toLocaleString()}.
+                    </div>
                   )}
                 </div>
               )}
@@ -432,8 +592,9 @@ export default function RetailPage() {
         {/* Mobile floating checkout button */}
         {cartItems.length > 0 && !showCheckout && (
           <button onClick={() => setShowCheckout(true)}
-            className="lg:hidden fixed bottom-6 right-6 z-40 w-14 h-14 rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-300 flex items-center justify-center font-black text-lg transition">
-            {cartItems.length}
+            className="lg:hidden fixed bottom-6 right-6 z-40 w-16 h-16 rounded-full bg-blue-600 hover:bg-blue-700 text-white shadow-2xl shadow-blue-400/40 flex items-center justify-center gap-2 font-black text-lg transition">
+            <KwIcon name="package" size={18} className="text-white" />
+            <span className="text-sm">{cartItems.length}</span>
           </button>
         )}
       </div>

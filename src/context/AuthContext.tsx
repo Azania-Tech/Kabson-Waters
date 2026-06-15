@@ -28,7 +28,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
-        const customUser: AuthUser = { ...firebaseUser };
+        const customUser = firebaseUser as AuthUser;
         let role = await getUserRole(firebaseUser.uid);
         if (!role) {
           role = "cashier";

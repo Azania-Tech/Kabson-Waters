@@ -3,12 +3,15 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import SiteShell from "@/components/site-shell";
+import { KwIcon } from "@/components/ui/icons";
+import { MetricCard, MetricGrid, PageHeader, PageLayout, Panel } from "@/components/ui/page-layout";
 import {
   subscribeToSales,
   subscribeToInventory,
   type RetailSale,
   type InventoryItem,
 } from "@/lib/commerce";
+import { shouldSkipInventory } from "@/lib/pricing";
 
 export default function AnalyticsPage() {
   const [sales, setSales] = useState<RetailSale[]>([]);
@@ -29,16 +32,29 @@ export default function AnalyticsPage() {
     const avgTransaction = sales.length > 0 ? totalRevenue / sales.length : 0;
     const inventoryValue = inventory.reduce((sum, i) => sum + i.price * i.stock, 0);
 
+    let refillRevenue = 0;
+    let refillCount = 0;
+    sales.forEach((sale) => {
+      sale.items.forEach((line) => {
+        if (line.saleKind === "refill") {
+          refillRevenue += line.quantity * line.price;
+          refillCount += line.quantity;
+        }
+      });
+    });
+
     const topProducts = inventory
       .map((item) => ({
         ...item,
         soldQuantity: sales.reduce((sum, sale) => {
-          const found = sale.items.find((i) => i.itemId === item.id);
-          return sum + (found?.quantity ?? 0);
+          return sum + sale.items
+            .filter((i) => i.itemId === item.id && !shouldSkipInventory(i.saleKind ?? "retail"))
+            .reduce((s, i) => s + i.quantity, 0);
         }, 0),
         revenue: sales.reduce((sum, sale) => {
-          const found = sale.items.find((i) => i.itemId === item.id);
-          return sum + (found ? found.quantity * found.price : 0);
+          return sum + sale.items
+            .filter((i) => i.itemId === item.id)
+            .reduce((s, i) => s + i.quantity * i.price, 0);
         }, 0),
       }))
       .sort((a, b) => b.revenue - a.revenue)
@@ -61,6 +77,8 @@ export default function AnalyticsPage() {
       inventoryValue,
       topProducts,
       paymentMethods,
+      refillRevenue,
+      refillCount,
     };
   }, [sales, inventory, today]);
 
@@ -88,50 +106,30 @@ export default function AnalyticsPage() {
 
   return (
     <SiteShell>
-      <div className="mx-auto flex max-w-7xl flex-col gap-6 px-6 py-8 lg:px-10">
+      <PageLayout>
+        <PageHeader
+          eyebrow="Business intelligence"
+          title="Analytics"
+          subtitle="Real-time sales metrics and operational insights."
+          tone="sky"
+          actions={
+            <Link href="/retail" className="btn btn-primary btn-sm">
+              <KwIcon name="plus" size={16} /> New sale
+            </Link>
+          }
+        />
 
-        {/* Header */}
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-sky-600 mb-1">Business intelligence</p>
-            <h1 className="text-3xl font-bold text-slate-900">Analytics</h1>
-            <p className="text-slate-500 mt-1 text-sm">Real-time sales metrics and operational insights.</p>
-          </div>
-          <Link
-            href="/retail"
-            className="flex items-center gap-2 rounded-xl bg-slate-950 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 transition"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-            </svg>
-            New sale
-          </Link>
-        </div>
-
-        {/* Key metrics */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {[
-            { label: "Today's revenue", value: `KES ${metrics.todayRevenue.toLocaleString()}`, sub: `${metrics.todaySales} transactions`, color: "text-emerald-600" },
-            { label: "Total revenue", value: `KES ${metrics.totalRevenue.toLocaleString()}`, sub: `${metrics.totalSales} all-time sales`, color: "text-sky-600" },
-            { label: "Avg. transaction", value: `KES ${Math.round(metrics.avgTransaction).toLocaleString()}`, sub: "Per completed sale", color: "text-blue-600" },
-            { label: "Inventory value", value: `KES ${metrics.inventoryValue.toLocaleString()}`, sub: `${inventory.length} products`, color: "text-violet-600" },
-          ].map((m) => (
-            <div key={m.label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">{m.label}</p>
-              <p className={`mt-2 text-2xl font-bold ${m.color}`}>{m.value}</p>
-              <p className="text-xs text-slate-400 mt-1">{m.sub}</p>
-            </div>
-          ))}
-        </div>
+        <MetricGrid cols={4}>
+          <MetricCard label="Today's revenue" value={`KES ${metrics.todayRevenue.toLocaleString()}`} sub={`${metrics.todaySales} transactions`} tone="emerald" icon="coins" />
+          <MetricCard label="Total revenue" value={`KES ${metrics.totalRevenue.toLocaleString()}`} sub={`${metrics.totalSales} all-time sales`} tone="sky" icon="chart" />
+          <MetricCard label="Refill revenue" value={`KES ${metrics.refillRevenue.toLocaleString()}`} sub={`${metrics.refillCount} refills sold`} tone="violet" icon="droplet" />
+          <MetricCard label="Inventory value" value={`KES ${metrics.inventoryValue.toLocaleString()}`} sub={`${inventory.length} products`} tone="indigo" icon="package" />
+        </MetricGrid>
 
         {/* Revenue chart + payment methods */}
         <div className="grid gap-6 lg:grid-cols-[1.4fr_0.6fr]">
           {/* Bar chart */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="mb-5">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-600">Revenue trend</p>
-              <h2 className="mt-1 text-xl font-semibold text-slate-900">Last 7 days</h2>
-            </div>
+          <Panel eyebrow="Revenue trend" title="Last 7 days">
             <div className="space-y-3">
               {chartData.map((day) => (
                 <div key={day.date} className="flex items-center gap-3">
@@ -150,14 +148,9 @@ export default function AnalyticsPage() {
                 </div>
               ))}
             </div>
-          </div>
+          </Panel>
 
-          {/* Payment methods */}
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="mb-5">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-sky-600">Breakdown</p>
-              <h2 className="mt-1 text-xl font-semibold text-slate-900">Payment methods</h2>
-            </div>
+          <Panel eyebrow="Breakdown" title="Payment methods">
             {Object.keys(metrics.paymentMethods).length === 0 ? (
               <p className="text-sm text-slate-400 py-4">No sales recorded yet.</p>
             ) : (
@@ -184,7 +177,7 @@ export default function AnalyticsPage() {
                   })}
               </div>
             )}
-          </div>
+          </Panel>
         </div>
 
         {/* Top products + recent transactions */}
@@ -267,7 +260,7 @@ export default function AnalyticsPage() {
             )}
           </div>
         </div>
-      </div>
+      </PageLayout>
     </SiteShell>
   );
 }

@@ -1,7 +1,8 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import SiteShell from "@/components/site-shell";
+import { PageHeader, PageLayout } from "@/components/ui/page-layout";
 import {
   createPurchaseOrderRecord,
   createSupplierRecord,
@@ -137,36 +138,23 @@ export default function SuppliersPage() {
 
   return (
     <SiteShell>
-      <div className="mx-auto flex max-w-7xl flex-col gap-6 px-6 py-8 lg:px-10">
-
-        {/* Header */}
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-sky-600 mb-1">Procurement</p>
-            <h1 className="text-3xl font-bold text-slate-900">Suppliers</h1>
-            <p className="text-slate-500 mt-1 text-sm">Manage supplier contracts, delivery schedules, and purchase orders.</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => { setShowSupplierForm((v) => !v); setShowPoForm(false); setSupplierError(""); }}
-              className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-              </svg>
-              Add supplier
-            </button>
-            <button
-              onClick={() => { setShowPoForm((v) => !v); setShowSupplierForm(false); setPoError(""); }}
-              className="flex items-center gap-2 rounded-xl bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 transition"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-              </svg>
-              New PO
-            </button>
-          </div>
-        </div>
+      <PageLayout>
+        <PageHeader
+          eyebrow="Procurement"
+          title="Suppliers"
+          subtitle="Manage supplier contracts, delivery schedules, and purchase orders."
+          tone="cyan"
+          actions={
+            <>
+              <button type="button" onClick={() => { setShowSupplierForm((v) => !v); setShowPoForm(false); setSupplierError(""); }} className="btn btn-secondary btn-sm">
+                Add supplier
+              </button>
+              <button type="button" onClick={() => { setShowPoForm((v) => !v); setShowSupplierForm(false); setPoError(""); }} className="btn btn-primary btn-sm">
+                New PO
+              </button>
+            </>
+          }
+        />
 
         {/* Metrics */}
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -401,7 +389,7 @@ export default function SuppliersPage() {
             </div>
           </div>
         )}
-      </div>
+      </PageLayout>
     </SiteShell>
   );
 }

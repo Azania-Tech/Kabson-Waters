@@ -2,9 +2,13 @@
 
 import { useEffect, useMemo, useState } from "react";
 import SiteShell from "@/components/site-shell";
+import { KwIcon } from "@/components/ui/icons";
+import { MetricCard, MetricGrid, PageHeader, PageLayout } from "@/components/ui/page-layout";
 import {
   subscribeToCustomers,
   createCustomerProfile,
+  updateCustomerProfile,
+  deleteCustomerProfile,
   updateCustomerLoyalty,
   settleCustomerCredit,
   type CustomerProfile,
@@ -21,6 +25,11 @@ export default function CustomersPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerProfile | null>(null);
+  
+  const [isEditing, setIsEditing] = useState(false);
+  const [editForm, setEditForm] = useState({ name: "", phone: "", email: "", creditLimit: "" });
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isBulkImporting, setIsBulkImporting] = useState(false);
 
   useEffect(() => {
     const unsubscribe = subscribeToCustomers((list) => setCustomers(list));
@@ -100,50 +109,138 @@ export default function CustomersPage() {
     }
   };
 
+  const handleEditSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!selectedCustomer) return;
+    if (!editForm.name.trim()) {
+      setError("Customer name is required.");
+      return;
+    }
+    setLoading(true);
+    try {
+      await updateCustomerProfile(selectedCustomer.id, {
+        name: editForm.name.trim(),
+        phone: editForm.phone.trim(),
+        email: editForm.email.trim(),
+        creditLimit: parseFloat(editForm.creditLimit) || 0,
+      });
+      setSelectedCustomer({
+        ...selectedCustomer,
+        name: editForm.name.trim(),
+        phone: editForm.phone.trim(),
+        email: editForm.email.trim(),
+        creditLimit: parseFloat(editForm.creditLimit) || 0,
+      });
+      setIsEditing(false);
+    } catch (err) {
+      console.error(err);
+      setError("Failed to update customer");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!selectedCustomer) return;
+    if (!confirm(`Are you sure you want to delete ${selectedCustomer.name}? This cannot be undone.`)) return;
+    setIsDeleting(true);
+    try {
+      await deleteCustomerProfile(selectedCustomer.id);
+      setSelectedCustomer(null);
+    } catch (err) {
+      console.error(err);
+      alert("Failed to delete customer");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleBulkImport = async () => {
+    if (!confirm("Are you sure you want to delete ALL existing customers and import the new list? This cannot be undone.")) return;
+    setIsBulkImporting(true);
+    try {
+      // 1. Delete existing
+      for (const c of customers) {
+        await deleteCustomerProfile(c.id);
+      }
+      
+      // 2. Import new list
+      const CUSTOMER_LIST = [
+        "Muigai Annex", "TRAQO KISASA", "Wakaba's place", "Red Eagle's", "Sarvid Hotel", "Tobriana Hotel",
+        "Babylon Classic", "Club unit", "Klub Makuti", "Almasi Resort", "Kimende Annex", "KQ Hotel",
+        "Honeybee Hotel", "Midway Resort", "Sweet water", "The Spot", "Kibii police Station",
+        "Kabson Waters", "Potters Inn Club", "Hotpot Annex", "Tayanas", "HillQera", "2 IN 1 Restaurant",
+        "Kiambu Road", "Acacia bar &lounge", "Rwathia bar& lounge", "EL Carlos", "Neco counselling",
+        "Digital Media", "Utopia Resort", "Bristar School", "Precious Blood School"
+      ];
+      
+      const uniqueCustomers = Array.from(new Set(CUSTOMER_LIST));
+      for (const name of uniqueCustomers) {
+        await createCustomerProfile({
+          name: name,
+          phone: "-",
+          email: "-",
+          totalPurchases: 0,
+          loyaltyPoints: 0,
+          creditLimit: 0,
+          creditBalance: 0,
+          lastPurchase: new Date().toISOString(),
+        });
+      }
+      alert("Bulk import successful!");
+    } catch (err) {
+      console.error(err);
+      alert("Error during bulk import.");
+    } finally {
+      setIsBulkImporting(false);
+    }
+  };
+
+  const openCustomerDetails = (customer: CustomerProfile) => {
+    setSelectedCustomer(customer);
+    setIsEditing(false);
+    setSettleAmount("");
+    setSettleError("");
+    setError("");
+    setEditForm({
+      name: customer.name,
+      phone: customer.phone || "",
+      email: customer.email || "",
+      creditLimit: (customer.creditLimit || 0).toString(),
+    });
+  };
+
   return (
     <SiteShell>
-      <div className="mx-auto flex max-w-7xl flex-col gap-6 px-6 py-8 lg:px-10">
+      <PageLayout>
+        <PageHeader
+          eyebrow="Customer management"
+          title="Customers"
+          subtitle="Manage profiles, loyalty points, and purchase history."
+          tone="sky"
+          actions={
+            <>
+              <button type="button" onClick={handleBulkImport} disabled={isBulkImporting} className="btn btn-secondary btn-sm text-rose-700 border-rose-200 bg-rose-50 hover:bg-rose-100">
+                {isBulkImporting ? "Importing..." : "Bulk Import"}
+              </button>
+              <button type="button" onClick={() => { setShowForm((v) => !v); setError(""); }} className="btn btn-primary btn-sm">
+                <KwIcon name="plus" size={16} /> Add customer
+              </button>
+            </>
+          }
+        />
 
-        {/* Header */}
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-sky-600 mb-1">
-              Customer management
-            </p>
-            <h1 className="text-3xl font-bold text-slate-900">Customers</h1>
-            <p className="text-slate-500 mt-1 text-sm">
-              Manage profiles, loyalty points, and purchase history.
-            </p>
-          </div>
-          <button
-            onClick={() => { setShowForm((v) => !v); setError(""); }}
-            className="flex items-center gap-2 rounded-xl bg-slate-950 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 transition"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-            </svg>
-            Add customer
-          </button>
-        </div>
-
-        {/* Metrics */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {[
-            { label: "Total customers", value: customers.length.toString(), color: "text-sky-600" },
-            { label: "Total revenue", value: `KES ${totalRevenue.toLocaleString()}`, color: "text-emerald-600" },
-            {
-              label: "Avg. customer value",
-              value: `KES ${customers.length > 0 ? Math.round(totalRevenue / customers.length).toLocaleString() : "0"}`,
-              color: "text-blue-600",
-            },
-            { label: "Total loyalty points", value: totalLoyalty.toLocaleString(), color: "text-amber-600" },
-          ].map((m) => (
-            <div key={m.label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">{m.label}</p>
-              <p className={`mt-2 text-2xl font-bold ${m.color}`}>{m.value}</p>
-            </div>
-          ))}
-        </div>
+        <MetricGrid cols={4}>
+          <MetricCard label="Total customers" value={customers.length.toString()} tone="sky" icon="users" />
+          <MetricCard label="Total revenue" value={`KES ${totalRevenue.toLocaleString()}`} tone="emerald" icon="coins" />
+          <MetricCard
+            label="Avg. customer value"
+            value={`KES ${customers.length > 0 ? Math.round(totalRevenue / customers.length).toLocaleString() : "0"}`}
+            tone="blue"
+            icon="chart"
+          />
+          <MetricCard label="Total loyalty points" value={totalLoyalty.toLocaleString()} tone="amber" icon="users" />
+        </MetricGrid>
 
         {/* Add customer form (collapsible) */}
         {showForm && (
@@ -251,7 +348,7 @@ export default function CustomersPage() {
                     <tr
                       key={customer.id}
                       className="hover:bg-slate-50 transition-colors cursor-pointer"
-                      onClick={() => setSelectedCustomer(customer)}
+                      onClick={() => openCustomerDetails(customer)}
                     >
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-3">
@@ -291,11 +388,15 @@ export default function CustomersPage() {
                           year: "numeric",
                         })}
                       </td>
-                      <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
+                      <td className="px-6 py-4">
                         <button
-                          onClick={() => setSelectedCustomer(customer)}
-                          className="text-sky-600 hover:text-sky-700 font-semibold text-sm transition"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openCustomerDetails(customer);
+                          }}
+                          className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700 text-sm font-semibold hover:bg-slate-100 transition"
                         >
+                          <KwIcon name="eye" size={16} className="text-slate-600" />
                           View
                         </button>
                       </td>
@@ -319,48 +420,142 @@ export default function CustomersPage() {
                   onClick={() => setShowForm(true)}
                   className="mt-3 text-sky-600 hover:text-sky-700 font-semibold text-sm"
                 >
-                  Add your first customer →
+                  Add your first customer ÔåÆ
                 </button>
               )}
             </div>
           )}
         </div>
-      </div>
 
       {/* Customer detail modal */}
       {selectedCustomer && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm px-4"
-          onClick={() => setSelectedCustomer(null)}
+          onClick={() => { setSelectedCustomer(null); setIsEditing(false); }}
         >
           <div
-            className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6"
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 max-h-[90vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-start justify-between gap-4 mb-5">
+            <div className="flex flex-col gap-4 mb-5">
+            <div className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-3">
-                <div className="w-12 h-12 rounded-full bg-sky-100 flex items-center justify-center text-sky-700 font-bold text-lg">
+                <div className="w-14 h-14 rounded-3xl bg-sky-100 flex items-center justify-center text-sky-700 font-black text-xl">
                   {selectedCustomer.name.charAt(0).toUpperCase()}
                 </div>
                 <div>
-                  <h3 className="font-bold text-slate-900 text-lg">{selectedCustomer.name}</h3>
-                  <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-semibold ${statusBadge(selectedCustomer.loyaltyPoints).classes}`}>
-                    {statusBadge(selectedCustomer.loyaltyPoints).label}
-                  </span>
+                  <h3 className="font-bold text-slate-900 text-xl">{selectedCustomer.name}</h3>
+                  <div className="mt-1 flex flex-wrap gap-2">
+                    <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                      <KwIcon name="search" size={14} className="text-slate-500" />
+                      {selectedCustomer.phone}
+                    </span>
+                    <span className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                      <KwIcon name="mail" size={14} className="text-slate-500" />
+                      {selectedCustomer.email}
+                    </span>
+                  </div>
                 </div>
               </div>
-              <button
-                onClick={() => setSelectedCustomer(null)}
-                className="text-slate-400 hover:text-slate-600 transition"
-                aria-label="Close"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+              <div className="flex items-center gap-2">
+                {!isEditing && (
+                  <button
+                    onClick={() => setIsEditing(true)}
+                    className="inline-flex items-center gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700 text-sm font-semibold hover:bg-slate-100 transition"
+                    title="Edit Customer"
+                  >
+                    <KwIcon name="edit" size={16} className="text-slate-600" />
+                    Edit
+                  </button>
+                )}
+                <button
+                  onClick={() => { setSelectedCustomer(null); setIsEditing(false); }}
+                  className="inline-flex items-center justify-center rounded-2xl bg-slate-950 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 transition"
+                  aria-label="Close"
+                >
+                  Close
+                </button>
+              </div>
             </div>
 
-            <div className="space-y-3 text-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="rounded-2xl bg-slate-50 p-4 border border-slate-100">
+                <p className="text-xs text-slate-500 uppercase tracking-wide">Total spent</p>
+                <p className="mt-2 text-lg font-black text-emerald-600">KES {selectedCustomer.totalPurchases.toLocaleString()}</p>
+              </div>
+              <div className="rounded-2xl bg-slate-50 p-4 border border-slate-100">
+                <p className="text-xs text-slate-500 uppercase tracking-wide">Loyalty points</p>
+                <p className="mt-2 text-lg font-black text-sky-600">{selectedCustomer.loyaltyPoints} pts</p>
+              </div>
+              <div className="rounded-2xl bg-slate-50 p-4 border border-slate-100">
+                <p className="text-xs text-slate-500 uppercase tracking-wide">Credit balance</p>
+                <p className="mt-2 text-lg font-black text-rose-600">KES {(selectedCustomer.creditBalance || 0).toLocaleString()}</p>
+                <p className="text-xs text-slate-400 mt-1">Limit: KES {(selectedCustomer.creditLimit || 0).toLocaleString()}</p>
+              </div>
+            </div>
+          </div>
+
+          {isEditing ? (
+              <form onSubmit={handleEditSubmit} className="space-y-4 mb-6">
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Name</label>
+                  <input
+                    type="text"
+                    value={editForm.name}
+                    onChange={(e) => setEditForm(f => ({ ...f, name: e.target.value }))}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-sky-500 outline-none"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Phone</label>
+                  <input
+                    type="tel"
+                    value={editForm.phone}
+                    onChange={(e) => setEditForm(f => ({ ...f, phone: e.target.value }))}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-sky-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Email</label>
+                  <input
+                    type="email"
+                    value={editForm.email}
+                    onChange={(e) => setEditForm(f => ({ ...f, email: e.target.value }))}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-sky-500 outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Credit Limit (KES)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={editForm.creditLimit}
+                    onChange={(e) => setEditForm(f => ({ ...f, creditLimit: e.target.value }))}
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-sky-500 outline-none"
+                  />
+                </div>
+                <div className="flex items-center gap-2 pt-2">
+                  <button
+                    type="submit"
+                    disabled={loading}
+                    className="flex-1 bg-sky-500 hover:bg-sky-600 disabled:bg-sky-300 text-white font-semibold py-2 rounded-xl text-sm transition"
+                  >
+                    {loading ? "Saving..." : "Save changes"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsEditing(false)}
+                    className="flex-1 border border-slate-200 text-slate-600 hover:bg-slate-50 font-semibold py-2 rounded-xl text-sm transition"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <>
+              <div className="space-y-3 text-sm">
               {[
                 { label: "Phone", value: selectedCustomer.phone },
                 { label: "Email", value: selectedCustomer.email },
@@ -423,16 +618,30 @@ export default function CustomersPage() {
                 {settleError && <p className="text-xs text-rose-600 mt-2">{settleError}</p>}
               </form>
             )}
+              </>
+            )}
 
-            <button
-              onClick={() => setSelectedCustomer(null)}
-              className="mt-6 w-full rounded-xl bg-slate-950 text-white font-semibold py-2.5 text-sm hover:bg-slate-800 transition"
-            >
-              Close
-            </button>
+            {!isEditing && (
+              <div className="mt-6 flex gap-3">
+                <button
+                  onClick={handleDelete}
+                  disabled={isDeleting}
+                  className="w-full rounded-xl border border-rose-200 text-rose-600 font-semibold py-2.5 text-sm hover:bg-rose-50 disabled:opacity-50 transition"
+                >
+                  {isDeleting ? "Deleting..." : "Delete Customer"}
+                </button>
+                <button
+                  onClick={() => { setSelectedCustomer(null); setIsEditing(false); }}
+                  className="w-full rounded-xl bg-slate-950 text-white font-semibold py-2.5 text-sm hover:bg-slate-800 transition"
+                >
+                  Close
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
+      </PageLayout>
     </SiteShell>
   );
 }

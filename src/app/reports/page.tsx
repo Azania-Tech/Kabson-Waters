@@ -1,15 +1,18 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useState } from "react";
 import SiteShell from "@/components/site-shell";
+import { KwIcon, type KwIconName } from "@/components/ui/icons";
+import { PageHeader, PageLayout } from "@/components/ui/page-layout";
 import {
   subscribeToSales, subscribeToInventory, subscribeToCustomers,
   subscribeToAccountingTransactions,
   type RetailSale, type InventoryItem, type CustomerProfile,
   type AccountingTransactionRecord,
 } from "@/lib/commerce";
+import { lineDisplayName } from "@/lib/pricing";
 
-// ─── helpers ────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────
 const fmt = (n: number) => `KES ${n.toLocaleString()}`;
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleDateString("en-KE", { day: "numeric", month: "short", year: "numeric" });
@@ -20,7 +23,7 @@ const parseAmt = (s: string) => Number(s.replace(/[^0-9.-]+/g, "")) || 0;
 
 type ReportType = "daily" | "item-sales" | "inventory" | "z-report" | "period" | "payment";
 
-// ─── print helper ────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────
 function printSection(id: string) {
   const el = document.getElementById(id);
   if (!el) return;
@@ -63,7 +66,7 @@ export default function ReportsPage() {
     return () => { u1(); u2(); u3(); u4(); };
   }, []);
 
-  // ── Daily sales ───────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────
   const dailySales = useMemo(() =>
     sales.filter((s) => s.createdAt.startsWith(selectedDate)),
     [sales, selectedDate]);
@@ -78,18 +81,20 @@ export default function ReportsPage() {
     return { revenue, count: dailySales.length, avg: dailySales.length ? Math.round(revenue / dailySales.length) : 0, vat, net: revenue - vat, byMethod };
   }, [dailySales]);
 
-  // ── Item sales ────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────
   const itemSalesData = useMemo(() => {
     const periodSales = sales.filter((s) => s.createdAt >= periodFrom && s.createdAt <= periodTo + "T23:59:59");
     const map: Record<string, { name: string; sku: string; qty: number; revenue: number }> = {};
     periodSales.forEach((sale) => {
       sale.items.forEach((si) => {
         const inv = inventory.find((i) => i.id === si.itemId);
-        const name = inv?.name ?? si.itemId;
-        const sku = inv?.sku ?? "—";
-        if (!map[si.itemId]) map[si.itemId] = { name, sku, qty: 0, revenue: 0 };
-        map[si.itemId].qty += si.quantity;
-        map[si.itemId].revenue += si.quantity * si.price;
+        const baseName = inv?.name ?? si.itemName ?? si.itemId;
+        const name = lineDisplayName(baseName, si.saleKind);
+        const sku = inv?.sku ?? "\u2014";
+        const mapKey = `${si.itemId}:${si.saleKind ?? "retail"}`;
+        if (!map[mapKey]) map[mapKey] = { name, sku, qty: 0, revenue: 0 };
+        map[mapKey].qty += si.quantity;
+        map[mapKey].revenue += si.quantity * si.price;
       });
     });
     return Object.values(map).sort((a, b) => b.revenue - a.revenue);
@@ -98,7 +103,7 @@ export default function ReportsPage() {
   const itemSalesPeriodRevenue = useMemo(() => itemSalesData.reduce((s, x) => s + x.revenue, 0), [itemSalesData]);
   const itemSalesPeriodQty = useMemo(() => itemSalesData.reduce((s, x) => s + x.qty, 0), [itemSalesData]);
 
-  // ── Inventory report ──────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────
   const invMetrics = useMemo(() => {
     const totalValue = inventory.reduce((s, i) => s + i.price * i.stock, 0);
     const lowStock = inventory.filter((i) => i.stock <= i.reorderPoint);
@@ -111,7 +116,7 @@ export default function ReportsPage() {
     return { totalValue, lowStock, outOfStock, totalSkus: inventory.length, byCat };
   }, [inventory]);
 
-  // ── Z-Report (end of day) ─────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────
   const zSales = useMemo(() =>
     sales.filter((s) => s.createdAt.startsWith(selectedDate)),
     [sales, selectedDate]);
@@ -133,17 +138,18 @@ export default function ReportsPage() {
     zSales.forEach((sale) => {
       sale.items.forEach((si) => {
         const inv = inventory.find((i) => i.id === si.itemId);
-        const name = inv?.name ?? si.itemId;
-        if (!itemMap[si.itemId]) itemMap[si.itemId] = { name, qty: 0, revenue: 0 };
-        itemMap[si.itemId].qty += si.quantity;
-        itemMap[si.itemId].revenue += si.quantity * si.price;
+        const name = lineDisplayName(inv?.name ?? si.itemName ?? si.itemId, si.saleKind);
+        const mapKey = `${si.itemId}:${si.saleKind ?? "retail"}`;
+        if (!itemMap[mapKey]) itemMap[mapKey] = { name, qty: 0, revenue: 0 };
+        itemMap[mapKey].qty += si.quantity;
+        itemMap[mapKey].revenue += si.quantity * si.price;
       });
     });
     const items = Object.values(itemMap).sort((a, b) => b.revenue - a.revenue);
     return { gross, vat, net, expenses, profit, count: zSales.length, byMethod, items };
   }, [zSales, inventory, transactions, selectedDate]);
 
-  // ── Period report ─────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────
   const periodSalesList = useMemo(() =>
     sales.filter((s) => s.createdAt >= periodFrom && s.createdAt <= periodTo + "T23:59:59"),
     [sales, periodFrom, periodTo]);
@@ -165,7 +171,7 @@ export default function ReportsPage() {
     return { revenue, vat, net: revenue - vat, count: periodSalesList.length, days, maxDay, expenses, profit: revenue - expenses };
   }, [periodSalesList, transactions, periodFrom, periodTo]);
 
-  // ── Payment method report ─────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────
   const paymentData = useMemo(() => {
     const periodSales = sales.filter((s) => s.createdAt >= periodFrom && s.createdAt <= periodTo + "T23:59:59");
     const total = periodSales.reduce((s, x) => s + x.total, 0);
@@ -178,45 +184,49 @@ export default function ReportsPage() {
     return { total, byMethod: Object.entries(byMethod).sort(([, a], [, b]) => b.revenue - a.revenue) };
   }, [sales, periodFrom, periodTo]);
 
-  // ── UI ────────────────────────────────────────────────────────────────────
-  const reports: { key: ReportType; label: string; icon: string; desc: string }[] = [
-    { key: "daily", label: "Daily Sales", icon: "📅", desc: "All transactions for a selected date" },
-    { key: "z-report", label: "Z-Report", icon: "🔒", desc: "End-of-day closure report" },
-    { key: "item-sales", label: "Item Sales", icon: "📦", desc: "Sales breakdown per product" },
-    { key: "inventory", label: "Inventory", icon: "🗃️", desc: "Stock levels, values & alerts" },
-    { key: "period", label: "Period Report", icon: "📈", desc: "Revenue & expenses over a date range" },
-    { key: "payment", label: "Payment Methods", icon: "💳", desc: "Revenue split by payment type" },
+  // ─────────────────────────────────────────────────
+  const reports: { key: ReportType; label: string; icon: KwIconName; desc: string }[] = [
+    { key: "daily", label: "Daily Sales", desc: "All transactions for a selected date", icon: "calendar" },
+    { key: "z-report", label: "Z-Report", desc: "End-of-day closure report", icon: "lock" },
+    { key: "item-sales", label: "Item Sales", desc: "Sales breakdown per product", icon: "package" },
+    { key: "inventory", label: "Inventory", desc: "Stock levels, values & alerts", icon: "layers" },
+    { key: "period", label: "Period Report", desc: "Revenue & expenses over a date range", icon: "chart" },
+    { key: "payment", label: "Payment Methods", desc: "Revenue split by payment type", icon: "credit-card" },
   ];
 
   const inputCls = "px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none bg-slate-50 focus:bg-white transition";
 
   return (
     <SiteShell>
-      <div className="mx-auto flex max-w-7xl flex-col gap-6 px-6 py-8 lg:px-10">
+      <PageLayout>
+        <PageHeader
+          eyebrow="Business reports"
+          title="Reports"
+          subtitle="Generate, view, and print operational reports."
+        />
 
-        {/* Header */}
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-[0.25em] text-blue-600 mb-1">Business reports</p>
-            <h1 className="text-3xl font-bold text-slate-900">Reports</h1>
-            <p className="text-slate-500 mt-1 text-sm">Generate, view, and print operational reports.</p>
-          </div>
-        </div>
-
-        {/* Report selector */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          {reports.map((r) => (
-            <button key={r.key} onClick={() => setActiveReport(r.key)}
-              className={`flex flex-col items-center gap-1.5 rounded-2xl border-2 p-4 text-center transition ${
-                activeReport === r.key
-                  ? "border-blue-500 bg-blue-50 shadow-sm"
-                  : "border-slate-200 bg-white hover:border-blue-300 hover:bg-slate-50"
-              }`}>
-              <span className="text-2xl">{r.icon}</span>
-              <p className={`text-sm font-bold ${activeReport === r.key ? "text-blue-700" : "text-slate-900"}`}>{r.label}</p>
-              <p className="text-xs text-slate-400 hidden sm:block leading-tight">{r.desc}</p>
-            </button>
-          ))}
+          {reports.map(({ key, label, icon, desc }) => {
+            const active = activeReport === key;
+            return (
+              <button key={key} type="button" onClick={() => setActiveReport(key)}
+                className={`group flex flex-col items-center gap-2.5 rounded-2xl border-2 p-4 text-center transition ${
+                  active
+                    ? "border-blue-500 bg-gradient-to-b from-blue-50 to-white shadow-md"
+                    : "border-slate-200 bg-white hover:border-blue-300 hover:shadow-sm"
+                }`}>
+                <span className={`flex h-11 w-11 items-center justify-center rounded-xl transition ${
+                  active
+                    ? "bg-gradient-to-br from-blue-600 to-cyan-500 text-white shadow-sm"
+                    : "bg-slate-100 text-slate-500 group-hover:bg-blue-100 group-hover:text-blue-600"
+                }`}>
+                  <KwIcon name={icon} size={20} />
+                </span>
+                <p className={`text-sm font-bold ${active ? "text-blue-700" : "text-slate-900"}`}>{label}</p>
+                <p className="text-xs text-slate-400 hidden sm:block leading-tight">{desc}</p>
+              </button>
+            );
+          })}
         </div>
 
         {/* Date pickers */}
@@ -241,17 +251,15 @@ export default function ReportsPage() {
           <button
             onClick={() => printSection("report-content")}
             className="ml-auto flex items-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold px-5 py-2.5 transition">
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M6.72 13.829c-.24.03-.48.062-.72.096m.72-.096a42.415 42.415 0 0110.56 0m-10.56 0L6.34 18m10.94-4.171c.24.03.48.062.72.096m-.72-.096L17.66 18m0 0l.229 2.523a1.125 1.125 0 01-1.12 1.227H7.231c-.662 0-1.18-.568-1.12-1.227L6.34 18m11.318 0h1.091A2.25 2.25 0 0021 15.75V9.456c0-1.081-.768-2.015-1.837-2.175a48.055 48.055 0 00-1.913-.247M6.34 18H5.25A2.25 2.25 0 013 15.75V9.456c0-1.081.768-2.015 1.837-2.175a48.056 48.056 0 011.913-.247m10.5 0a48.536 48.536 0 00-10.5 0m10.5 0V3.375c0-.621-.504-1.125-1.125-1.125h-8.25c-.621 0-1.125.504-1.125 1.125v3.659M18 10.5h.008v.008H18V10.5zm-3 0h.008v.008H15V10.5z" />
-            </svg>
+            <KwIcon name="printer" size={16} />
             Print / Export
           </button>
         </div>
 
-        {/* ── Report content ── */}
+        {/* ÔöÇÔöÇ Report content ÔöÇÔöÇ */}
         <div id="report-content">
 
-          {/* ── DAILY SALES REPORT ── */}
+          {/* ÔöÇÔöÇ DAILY SALES REPORT ÔöÇÔöÇ */}
           {activeReport === "daily" && (
             <div className="flex flex-col gap-5">
               <div className="rounded-2xl border border-blue-100 bg-blue-50 px-6 py-4 flex items-center justify-between flex-wrap gap-3">
@@ -291,7 +299,7 @@ export default function ReportsPage() {
               {/* Transaction list */}
               <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
                 <div className="px-6 py-4 border-b border-slate-100">
-                  <h2 className="font-bold text-slate-900">All transactions — {fmtDate(selectedDate + "T00:00:00")}</h2>
+                  <h2 className="font-bold text-slate-900">All transactions &mdash; {fmtDate(selectedDate + "T00:00:00")}</h2>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -336,15 +344,15 @@ export default function ReportsPage() {
             </div>
           )}
 
-          {/* ── Z-REPORT ── */}
+          {/* ÔöÇÔöÇ Z-REPORT ÔöÇÔöÇ */}
           {activeReport === "z-report" && (
             <div className="flex flex-col gap-5">
               <div className="rounded-2xl border-2 border-slate-900 bg-slate-950 text-white px-6 py-5">
                 <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
                   <div>
-                    <p className="text-xs font-bold uppercase tracking-[0.3em] text-sky-300">Z-Report — End of Day Closure</p>
+                    <p className="text-xs font-bold uppercase tracking-[0.3em] text-sky-300">Z-Report &mdash; End of Day Closure</p>
                     <p className="text-2xl font-black mt-1">KABSON WATERS</p>
-                    <p className="text-slate-400 text-sm">Date: {fmtDate(selectedDate + "T00:00:00")} · Generated: {new Date().toLocaleTimeString("en-KE")}</p>
+                    <p className="text-slate-400 text-sm">Date: {fmtDate(selectedDate + "T00:00:00")} &middot; Generated: {new Date().toLocaleTimeString("en-KE")}</p>
                   </div>
                   <div className="text-right">
                     <p className="text-xs text-slate-400">Total transactions</p>
@@ -451,12 +459,12 @@ export default function ReportsPage() {
               </div>
 
               <div className="rounded-xl border-2 border-dashed border-slate-300 px-5 py-3 text-center text-xs text-slate-500 font-semibold tracking-wide">
-                *** END OF Z-REPORT — KABSON WATERS — {fmtDate(selectedDate + "T00:00:00")} ***
+                *** END OF Z-REPORT &mdash; KABSON WATERS &mdash; {fmtDate(selectedDate + "T00:00:00")} ***
               </div>
             </div>
           )}
 
-          {/* ── ITEM SALES REPORT ── */}
+          {/* ÔöÇÔöÇ ITEM SALES REPORT ÔöÇÔöÇ */}
           {activeReport === "item-sales" && (
             <div className="flex flex-col gap-5">
               <div className="grid gap-4 sm:grid-cols-3">
@@ -475,7 +483,7 @@ export default function ReportsPage() {
               <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
                 <div className="px-6 py-4 border-b border-slate-100">
                   <h2 className="font-bold text-slate-900">Item sales breakdown</h2>
-                  <p className="text-xs text-slate-400 mt-0.5">{fmtDate(periodFrom + "T00:00:00")} — {fmtDate(periodTo + "T00:00:00")}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">{fmtDate(periodFrom + "T00:00:00")} &mdash; {fmtDate(periodTo + "T00:00:00")}</p>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -530,7 +538,7 @@ export default function ReportsPage() {
             </div>
           )}
 
-          {/* ── INVENTORY REPORT ── */}
+          {/* ÔöÇÔöÇ INVENTORY REPORT ÔöÇÔöÇ */}
           {activeReport === "inventory" && (
             <div className="flex flex-col gap-5">
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -614,7 +622,7 @@ export default function ReportsPage() {
             </div>
           )}
 
-          {/* ── PERIOD REPORT ── */}
+          {/* ÔöÇÔöÇ PERIOD REPORT ÔöÇÔöÇ */}
           {activeReport === "period" && (
             <div className="flex flex-col gap-5">
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -657,9 +665,9 @@ export default function ReportsPage() {
                 <div className="space-y-3">
                   {[
                     { label: "Gross revenue", value: periodMetrics.revenue, color: "text-emerald-600", sign: "+" },
-                    { label: "VAT (16%)", value: periodMetrics.vat, color: "text-violet-600", sign: "−" },
+                    { label: "VAT (16%)", value: periodMetrics.vat, color: "text-violet-600", sign: "\u2212" },
                     { label: "Net revenue", value: periodMetrics.net, color: "text-blue-600", sign: "" },
-                    { label: "Recorded expenses", value: periodMetrics.expenses, color: "text-rose-600", sign: "−" },
+                    { label: "Recorded expenses", value: periodMetrics.expenses, color: "text-rose-600", sign: "\u2212" },
                   ].map((row) => (
                     <div key={row.label} className="flex justify-between items-center py-2.5 border-b border-slate-100 last:border-0">
                       <span className="text-sm font-semibold text-slate-700">{row.label}</span>
@@ -675,14 +683,14 @@ export default function ReportsPage() {
             </div>
           )}
 
-          {/* ── PAYMENT METHOD REPORT ── */}
+          {/* ÔöÇÔöÇ PAYMENT METHOD REPORT ÔöÇÔöÇ */}
           {activeReport === "payment" && (
             <div className="flex flex-col gap-5">
               <div className="grid gap-4 sm:grid-cols-3">
                 <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:col-span-1">
                   <p className="text-xs font-bold text-slate-500 uppercase tracking-wide">Total revenue</p>
                   <p className="text-2xl font-black text-emerald-600 mt-1">{fmt(paymentData.total)}</p>
-                  <p className="text-xs text-slate-400 mt-1">{fmtDate(periodFrom + "T00:00:00")} — {fmtDate(periodTo + "T00:00:00")}</p>
+                  <p className="text-xs text-slate-400 mt-1">{fmtDate(periodFrom + "T00:00:00")} &mdash; {fmtDate(periodTo + "T00:00:00")}</p>
                 </div>
                 <div className="sm:col-span-2 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
                   <h2 className="font-bold text-slate-900 mb-4">Revenue by payment method</h2>
@@ -750,7 +758,8 @@ export default function ReportsPage() {
           )}
 
         </div>
-      </div>
+      </PageLayout>
     </SiteShell>
   );
 }
+

@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import SiteShell from "@/components/site-shell";
+import { KwIcon } from "@/components/ui/icons";
+import { MetricCard, MetricGrid, PageHeader, PageLayout, PageTabs } from "@/components/ui/page-layout";
 import {
   createAccountingTransactionRecord,
   subscribeToAccountingTransactions,
@@ -117,50 +119,35 @@ export default function AccountingPage() {
     }
   };
 
-  const tabs: { key: Tab; label: string }[] = [
-    { key: "overview", label: "Overview" },
-    { key: "expenses", label: "Expenses" },
-    { key: "tax", label: "Tax & VAT" },
-    { key: "ledger", label: "Ledger" },
+  const tabs: { key: Tab; label: string; icon: "chart" | "coins" | "report" | "layers" }[] = [
+    { key: "overview", label: "Overview", icon: "chart" },
+    { key: "expenses", label: "Expenses", icon: "coins" },
+    { key: "tax", label: "Tax & VAT", icon: "report" },
+    { key: "ledger", label: "Ledger", icon: "layers" },
   ];
 
   return (
     <SiteShell>
-      <div className="mx-auto flex max-w-7xl flex-col gap-6 px-6 py-8 lg:px-10">
+      <PageLayout>
+        <PageHeader
+          eyebrow="Finance"
+          title="Accounting"
+          subtitle="Revenue, expenses, tax obligations, and full ledger."
+          tone="emerald"
+          actions={
+            <button type="button" onClick={() => { setShowForm((v) => !v); setError(""); }} className="btn btn-primary btn-sm">
+              <KwIcon name="plus" size={16} /> Add entry
+            </button>
+          }
+        />
 
-        {/* Header */}
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.25em] text-sky-600 mb-1">Finance</p>
-            <h1 className="text-3xl font-bold text-slate-900">Accounting</h1>
-            <p className="text-slate-500 mt-1 text-sm">Revenue, expenses, tax obligations, and full ledger.</p>
-          </div>
-          <button
-            onClick={() => { setShowForm((v) => !v); setError(""); }}
-            className="flex items-center gap-2 rounded-xl bg-slate-950 px-5 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 transition"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-            </svg>
-            Add entry
-          </button>
-        </div>
-
-        {/* KPI strip */}
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          {[
-            { label: "Total revenue", value: `KES ${metrics.totalRevenue.toLocaleString()}`, color: "text-emerald-600" },
-            { label: "Total expenses", value: `KES ${metrics.totalExpenses.toLocaleString()}`, color: "text-rose-600" },
-            { label: "Net position", value: `KES ${metrics.net.toLocaleString()}`, color: metrics.net >= 0 ? "text-emerald-600" : "text-rose-600" },
-            { label: "Outstanding", value: `KES ${metrics.outstanding.toLocaleString()}`, color: "text-amber-600" },
-            { label: "VAT collected", value: `KES ${Math.round(metrics.vatCollected).toLocaleString()}`, color: "text-violet-600" },
-          ].map((m) => (
-            <div key={m.label} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">{m.label}</p>
-              <p className={`mt-2 text-xl font-bold ${m.color}`}>{m.value}</p>
-            </div>
-          ))}
-        </div>
+        <MetricGrid cols={5}>
+          <MetricCard label="Total revenue" value={`KES ${metrics.totalRevenue.toLocaleString()}`} tone="emerald" icon="coins" />
+          <MetricCard label="Total expenses" value={`KES ${metrics.totalExpenses.toLocaleString()}`} tone="rose" icon="coins" />
+          <MetricCard label="Net position" value={`KES ${metrics.net.toLocaleString()}`} tone={metrics.net >= 0 ? "emerald" : "rose"} icon="chart" />
+          <MetricCard label="Outstanding" value={`KES ${metrics.outstanding.toLocaleString()}`} tone="amber" icon="alert" />
+          <MetricCard label="VAT collected" value={`KES ${Math.round(metrics.vatCollected).toLocaleString()}`} tone="violet" icon="report" />
+        </MetricGrid>
 
         {/* Add entry form */}
         {showForm && (
@@ -220,14 +207,7 @@ export default function AccountingPage() {
         )}
 
         {/* Tabs */}
-        <div className="flex gap-1 rounded-xl border border-slate-200 bg-slate-100 p-1 w-fit">
-          {tabs.map((t) => (
-            <button key={t.key} onClick={() => setTab(t.key)}
-              className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${tab === t.key ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-700"}`}>
-              {t.label}
-            </button>
-          ))}
-        </div>
+        <PageTabs tabs={tabs} active={tab} onChange={setTab} />
 
         {/* OVERVIEW TAB */}
         {tab === "overview" && (
@@ -460,7 +440,7 @@ export default function AccountingPage() {
           </div>
         )}
 
-      </div>
+      </PageLayout>
     </SiteShell>
   );
 }

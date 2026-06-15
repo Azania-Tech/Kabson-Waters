@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import SiteShell from "@/components/site-shell";
 import { useAuth } from "@/context/AuthContext";
+import { auth } from "@/lib/firebase";
+import { EmailAuthProvider, reauthenticateWithCredential } from "firebase/auth";
 import {
   subscribeToUsers,
   setUserRole,
@@ -12,12 +14,19 @@ import {
   subscribeToSales,
   subscribeToInventory,
   subscribeToCustomers,
+  subscribeToStores,
+  subscribeToTransfers,
   createUserAccount,
+  createStore,
+  deleteTodaysSalesRecords,
+  deleteAllRecordsExceptUsers,
   getStoreConfig,
   updateStoreConfig,
   type UserRecord,
   type CustomerOrderRecord,
   type StoreConfig,
+  type Store,
+  type InterStoreTransfer,
 } from "@/lib/commerce";
 
 const ROLES: UserRecord["role"][] = ["cashier", "manager", "admin", "owner"];
@@ -76,6 +85,12 @@ export default function AdminPage() {
   const [newStoreForm, setNewStoreForm] = useState({ name: "", location: "", type: "retail" as const });
   const [newStoreSaving, setNewStoreSaving] = useState(false);
   const [transferFilterStore, setTransferFilterStore] = useState<string | "all">("all");
+  const [showClearModal, setShowClearModal] = useState(false);
+  const [clearTarget, setClearTarget] = useState<"today" | "all" | null>(null);
+  const [clearPassword, setClearPassword] = useState("");
+  const [clearLoading, setClearLoading] = useState(false);
+  const [clearError, setClearError] = useState("");
+  const [clearSuccess, setClearSuccess] = useState("");
 
   // Guard: redirect non-admins
   useEffect(() => {
@@ -143,6 +158,70 @@ export default function AdminPage() {
       await updateOrderStatus(orderId, status);
     } finally {
       setUpdatingOrder(null);
+    }
+  };
+
+  const openClearModal = (target: "today" | "all") => {
+    setClearTarget(target);
+    setClearError("");
+    setClearPassword("");
+    setShowClearModal(true);
+  };
+
+  const handleConfirmClear = async () => {
+    setClearError("");
+    if (!clearPassword.trim()) {
+      setClearError("Enter your password to confirm.");
+      return;
+    }
+    if (!clearTarget) {
+      setClearError("Select a clear action.");
+      return;
+    }
+    if (!user) {
+      setClearError("You must be signed in to clear records.");
+      return;
+    }
+    if (!user.email) {
+      setClearError("Your account does not have an email address. Please sign in with an email/password account.");
+      return;
+    }
+    if (!auth) {
+      setClearError("Firebase auth is not initialized. Reload the page and try again.");
+      return;
+    }
+    setClearLoading(true);
+    try {
+      const credential = EmailAuthProvider.credential(user.email, clearPassword);
+      await reauthenticateWithCredential(user, credential);
+
+      if (clearTarget === "today") {
+        const deleted = await deleteTodaysSalesRecords();
+        setClearSuccess(`Cleared ${deleted} sales records from today.`);
+      } else {
+        const deleted = await deleteAllRecordsExceptUsers();
+        setClearSuccess(`Cleared ${deleted} records from all collections except users.`);
+      }
+
+      setShowClearModal(false);
+      setClearPassword("");
+      setClearTarget(null);
+      setTimeout(() => setClearSuccess(""), 5000);
+    } catch (err: unknown) {
+      if (err && typeof err === "object" && "code" in err) {
+        const code = (err as { code?: string }).code;
+        if (code === "auth/wrong-password") {
+          setClearError("Incorrect password. Please try again.");
+        } else if (code === "auth/requires-recent-login") {
+          setClearError("Please sign out and sign in again before clearing records.");
+        } else {
+          setClearError(err instanceof Error ? err.message : "Failed to authenticate.");
+        }
+      } else {
+        setClearError(err instanceof Error ? err.message : "Failed to authenticate.");
+      }
+    } finally {
+      setClearLoading(false);
     }
   };
 
@@ -361,6 +440,30 @@ export default function AdminPage() {
                     </button>
                   )}
                 </div>
+              )}
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <p className="text-xs font-semibold uppercase tracking-[0.2em] text-rose-600 mb-1">Secure action</p>
+              <h2 className="text-lg font-semibold text-slate-900 mb-4">Clear today's sales</h2>
+              <p className="text-sm text-slate-500 mb-5">Delete all sales records created today. This is protected by password verification.</p>
+              <div className="flex flex-col gap-3">
+                <button
+                  type="button"
+                  onClick={() => openClearModal("today")}
+                  className="rounded-xl bg-rose-600 hover:bg-rose-700 text-white px-5 py-3 text-sm font-semibold transition"
+                >
+                  Clear today's sales
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openClearModal("all")}
+                  className="rounded-xl bg-slate-900 hover:bg-slate-800 text-white px-5 py-3 text-sm font-semibold transition"
+                >
+                  Clear all records except users
+                </button>
+              </div>
+              {clearSuccess && (
+                <p className="mt-4 text-sm text-emerald-600">{clearSuccess}</p>
               )}
             </div>
           </div>
@@ -758,6 +861,79 @@ export default function AdminPage() {
           </div>
         </div>
       )}
+
+      {showClearModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ background: "rgba(2,6,23,0.55)", backdropFilter: "blur(4px)" }}
+          onClick={(e) => { if (e.target === e.currentTarget) setShowClearModal(false); }}
+        >
+          <div className="w-full max-w-md rounded-3xl bg-white shadow-2xl overflow-hidden animate-in">
+            <div className="px-8 pt-8 pb-6">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.3em] text-rose-500 mb-1">Secure action</p>
+                  <h2 className="text-xl font-bold text-slate-900">
+                    {clearTarget === "all" ? "Clear all business records" : "Clear today's sales"}
+                  </h2>
+                  <p className="mt-1 text-slate-500 text-sm">
+                    {clearTarget === "all"
+                      ? "Enter your password to confirm and delete every business record except user profiles."
+                      : "Enter your password to confirm and delete today's sales records."}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowClearModal(false)}
+                  className="rounded-full w-9 h-9 flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div className="px-8 pb-8">
+              {clearError && (
+                <div className="rounded-xl bg-rose-50 border border-rose-200 px-4 py-3 text-sm text-rose-700 mb-4">
+                  {clearError}
+                </div>
+              )}
+              <div className="flex flex-col gap-3">
+                <label className="text-xs font-semibold uppercase tracking-wide text-slate-600">Password</label>
+                <input
+                  type="password"
+                  value={clearPassword}
+                  onChange={(e) => setClearPassword(e.target.value)}
+                  placeholder="Enter your admin password"
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-transparent transition"
+                />
+              </div>
+              <div className="mt-6 flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleConfirmClear}
+                  disabled={clearLoading}
+                  className="flex-1 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white px-4 py-3 text-sm font-semibold transition"
+                >
+                  {clearLoading
+                    ? "Clearing..."
+                    : clearTarget === "all"
+                      ? "Confirm clear all records"
+                      : "Confirm clear sales"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowClearModal(false)}
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-100 transition"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </SiteShell>
   );
 }
